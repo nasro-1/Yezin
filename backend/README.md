@@ -7,17 +7,22 @@ open, migrate, or replace the Flutter application's SQLite database.
 
 ```powershell
 cd backend
-$env:BAYAA_ENVIRONMENT = "development"
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 python -m alembic upgrade head
 python -m pytest -vv
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8010
 ```
 
-Swagger is at `http://127.0.0.1:8000/docs`. A phone on the same Wi-Fi will
-eventually use `http://LAPTOP_IP:8000`. Allow inbound TCP 8000 for the private
+The checked-in `.env.example` contains only the explicit development
+environment setting. Copy it to the ignored local `.env` before starting the
+backend. Settings load that file from the backend directory regardless of the
+process working directory. Alternatively, set
+`$env:BAYAA_ENVIRONMENT = "development"` in PowerShell before starting Uvicorn.
+Swagger is at `http://127.0.0.1:8010/docs`. A phone on the same Wi-Fi can use
+`http://LAPTOP_IP:8010`. Allow inbound TCP 8010 for the private
 network profile in Windows Firewall if needed; firewall rules are not changed
 automatically.
 
@@ -89,7 +94,7 @@ remove it immediately after use.
 Replace `<LAN-IP>` with the backend machine's local network address:
 
 ```text
-http://<LAN-IP>:8000/api/v1
+http://<LAN-IP>:8010/api/v1
 ```
 
 The address is environment-specific and must not be hardcoded into application

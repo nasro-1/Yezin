@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -11,7 +11,9 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="BAYAA_", env_file=".env")
+    model_config = SettingsConfigDict(
+        env_prefix="BAYAA_", env_file=BACKEND_ROOT / ".env"
+    )
 
     environment: Literal["development", "test", "production"]
     database_url: str = f"sqlite:///{(DATA_DIR / 'bayaa_server.db').as_posix()}"
@@ -20,6 +22,20 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_minutes: int = 60
     cors_origins: str = "*"
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_environment_setting(cls, values: Any) -> Any:
+        if not isinstance(values, dict) or not values.get("environment"):
+            raise ValueError(
+                "Set BAYAA_ENVIRONMENT to development, test, or production "
+                "in the environment or backend/.env."
+            )
+        if values["environment"] not in {"development", "test", "production"}:
+            raise ValueError(
+                "BAYAA_ENVIRONMENT must be development, test, or production."
+            )
+        return values
 
     @property
     def cors_origin_list(self) -> list[str]:

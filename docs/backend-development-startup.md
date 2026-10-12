@@ -27,6 +27,16 @@ port `8010` is occupied.
    the repository's `backend` directory
    ```
 
+   Prepare local development configuration once:
+
+   ```powershell
+   if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+   ```
+
+   `.env.example` sets only `BAYAA_ENVIRONMENT=development`; the local `.env`
+   is ignored by Git. Alternatively, set
+   `$env:BAYAA_ENVIRONMENT = "development"` in this PowerShell session.
+
    ```powershell
    python -m uvicorn app.main:app --host 0.0.0.0 --port 8010
    ```

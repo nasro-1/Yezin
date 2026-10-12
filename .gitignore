@@ -1,0 +1,169 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+
+/build/
+.packages
+# Generated plugin registrant
+**/ios/Runner/GeneratedPluginRegistrant.*dart
+**/android/app/src/main/kotlin/io/flutter/plugins/GeneratedPluginRegistrant.kt
+# Generated file for plugin symlinks
+**/flutter_export_environment.sh
+# Obsolete analysis cache
+.dart_tool/package_config.json
+# Fuchsia related
+.fuchsia/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+# Local configuration file
+/local.properties
+# Keystore files
+*.jks
+*.keystore
+# Google Services (e.g. APIs or Firebase)
+**/google-services.json
+**/GoogleService-Info.plist
+# Apple signing credentials
+*.p12
+*.pfx
+*.mobileprovision
+*.p8
+*.pem
+*.key
+# Fastlane files
+/fastlane/report.xml
+/fastlane/Preview.html
+/fastlane/screenshots
+/fastlane/test_output
+# Flutter generated files
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/App.framework
+**/ios/Flutter/engine/
+**/ios/Flutter/flutter_export_environment.sh
+**/android/app/src/main/jniLibs/
+**/android/app/src/debug/jniLibs/
+**/android/app/src/profile/jniLibs/
+**/android/local.properties
+# CocoaPods
+**/ios/Pods/
+**/ios/.symlinks/
+# Xcode
+**/ios/Runner.xcworkspace/
+**/ios/Runner/xcuserdata/
+**/ios/build/
+**/ios/DerivedData/
+# macOS
+**/macos/Flutter/ephemeral/
+**/macos/Pods/
+**/macos/Runner.xcworkspace/
+**/macos/Runner/xcuserdata/
+**/macos/build/
+# Windows
+**/windows/Flutter/ephemeral/
+**/windows/flutter_export_environment.bat
+**/windows/runner/Debug/
+**/windows/runner/Release/
+**/windows/runner/GeneratedPluginRegistrant.cpp
+**/windows/runner/GeneratedPluginRegistrant.h
+**/windows/build/
+# Linux
+**/linux/flutter/ephemeral/
+**/linux/flutter_export_environment.sh
+**/linux/build/
+# Web
+**/web/flutter_service_worker.js
+**/web/flutter_service_worker.js.map
+
+# Firebase Crashlytics
+**/ios/Runner/Crashlytics.framework/
+**/android/app/crashlytics/
+# VS Code
+.vscode/
+#folder database
+
+# End of .gitignore
+#lib/secrets.dart
+
+# FVM Version Cache
+.fvm/
+# Local secrets and credentials
+/lib/secrets.dart
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local databases and backups
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary logs and test outputs
+/.tmp_*
+/analyze.log
+/flutter_*.log
+/flutter_*.txt
+/backend_pytest_output.txt
+/product_target_json.txt
+/product_test_output.txt
+/widget_json.txt
+/git_diff_check_output.txt
+/validation*.log
+
+# Broken worktree metadata backup
+/.git-worktree-backup
+
+# Root-level QA screenshots
+/*.png
+/Screenshots/*
+!/Screenshots/approved/
+!/Screenshots/approved/**
+
+# Local backend data and generated artifacts
+/backend/data/*.db*
+/backend/pytest_out.txt
+/backend/*.egg-info/
+
+# Local screenshots — keep out of Git
+/Screenshots/

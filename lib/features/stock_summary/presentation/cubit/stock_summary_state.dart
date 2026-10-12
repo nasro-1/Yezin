@@ -1,0 +1,50 @@
+import 'package:equatable/equatable.dart';
+import '../../data/models/stock_summary_category_model.dart';
+
+abstract class StockSummaryState extends Equatable {
+  const StockSummaryState();
+
+  @override
+  List<Object> get props => [];
+}
+
+class StockSummaryInitial extends StockSummaryState {}
+
+class StockSummaryLoading extends StockSummaryState {}
+
+class StockSummaryLoaded extends StockSummaryState {
+  final List<StockSummaryCategoryModel> categories;
+  final double totalStoreHistoricValue;
+  final double totalStoreCurrentValue;
+  final double totalExpectedProfit;
+  final bool historicValueAvailable;
+  final bool inventoryCostAvailable;
+
+  const StockSummaryLoaded({
+    required this.categories,
+    required this.totalStoreHistoricValue,
+    required this.totalStoreCurrentValue,
+    required this.totalExpectedProfit,
+    this.historicValueAvailable = true,
+    this.inventoryCostAvailable = true,
+  });
+
+  @override
+  List<Object> get props => [
+        categories,
+        totalStoreHistoricValue,
+        totalStoreCurrentValue,
+        totalExpectedProfit,
+        historicValueAvailable,
+        inventoryCostAvailable,
+      ];
+}
+
+class StockSummaryError extends StockSummaryState {
+  final String message;
+
+  const StockSummaryError(this.message);
+
+  @override
+  List<Object> get props => [message];
+}

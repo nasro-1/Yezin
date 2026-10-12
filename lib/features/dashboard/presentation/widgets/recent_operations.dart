@@ -1,0 +1,859 @@
+// ignore_for_file: deprecated_member_use
+
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import '../../../../core/constants/app_colors.dart';
+
+import 'package:bayaa_pos/core/localization/translation_helper.dart';
+import '../../../../core/data/models/activity_log.dart';
+import '../../../../core/services/activity_logger.dart';
+import 'package:intl/intl.dart';
+import '../../../../core/di/dependency_injection.dart';
+import '../../../../l10n/app_localizations.dart';
+import '../../../auth/data/models/user_model.dart';
+import '../../../auth/presentation/cubit/user_cubit.dart';
+import '../../../../core/network/authority_context.dart';
+import '../../../sales/domain/sales_repository.dart';
+
+class RecentOperations extends StatefulWidget {
+  const RecentOperations({super.key});
+
+  @override
+  State<RecentOperations> createState() => _RecentOperationsState();
+}
+
+class _RecentOperationsState extends State<RecentOperations> {
+  List<SessionActivityGroup> _groups = [];
+  bool _loading = true;
+  bool _loadingMore = false;
+  int _sessionLimit = 5;
+  StreamSubscription? _activitySub;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadGrouped();
+    // Listen to stream for live updates
+    _activitySub = getIt<ActivityLogger>()
+        .activitiesStream
+        .listen((_) => _loadGrouped(silent: true));
+  }
+
+  @override
+  void dispose() {
+    _activitySub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadGrouped({bool silent = false}) async {
+    if (!silent && !mounted) return;
+    if (!silent) setState(() => _loading = true);
+    try {
+      final groups = getIt<AuthorityContext>().writesToServer
+          ? await _loadServerGroups()
+          : await getIt<ActivityLogger>().getActivitiesGroupedBySession(
+              sessionLimit: _sessionLimit,
+              activeUserId: getIt<UserCubit>().currentUser.username,
+            );
+      if (mounted) {
+        setState(() {
+          _groups = groups;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<List<SessionActivityGroup>> _loadServerGroups() async {
+    final result = await getIt<SalesRepository>().getRecentSales(limit: 100);
+    return result.fold(
+      (failure) => throw StateError(failure.message),
+      (sales) {
+        final activities = sales.map((sale) {
+          final timestamp = sale.date.toLocal();
+          return ActivityLog(
+            id: 'server-sale-${sale.id}',
+            sessionId: 'server-sales',
+            timestamp: timestamp,
+            type: sale.isRefund ? ActivityType.refund : ActivityType.sale,
+            description: sale.isRefund
+                ? 'Refund: ${sale.total.toStringAsFixed(2)} DA'
+                : 'Sale: ${sale.total.toStringAsFixed(2)} DA',
+            userName: sale.cashierName ??
+                sale.cashierUsername ??
+                AppLocalizations.of(context).cashier,
+            details: {'saleId': sale.id, 'total': sale.total},
+            eventKey: sale.isRefund ? 'refundCompleted' : 'saleCompleted',
+            parameters: {
+              'user': sale.cashierName ?? sale.cashierUsername,
+              'id': sale.id,
+            },
+          );
+        }).toList();
+        final exchangeActivities = getIt<ActivityLogger>()
+            .recentActivities
+            .where((activity) => activity.type == ActivityType.exchange);
+        activities.addAll(exchangeActivities);
+        if (activities.isEmpty) return const [];
+        activities.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+        return [
+          SessionActivityGroup(
+            sessionId: 'server-sales',
+            activities: activities,
+            openTime: activities.first.timestamp,
+            closeTime: activities.last.timestamp,
+            openedBy: activities.first.userName,
+            isOpen: false,
+          ),
+        ];
+      },
+    );
+  }
+
+  Future<void> _loadMore() async {
+    if (_loadingMore) return;
+    setState(() => _loadingMore = true);
+    _sessionLimit += 5;
+    try {
+      final groups = getIt<AuthorityContext>().writesToServer
+          ? await _loadServerGroups()
+          : await getIt<ActivityLogger>().getActivitiesGroupedBySession(
+              sessionLimit: _sessionLimit,
+              activeUserId: getIt<UserCubit>().currentUser.username,
+            );
+      if (mounted) {
+        setState(() {
+          _groups = groups;
+          _loadingMore = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
+  IconData _getIconForType(ActivityType type) {
+    switch (type) {
+      case ActivityType.sale:
+        return LucideIcons.shoppingCart;
+      case ActivityType.exchange:
+        return LucideIcons.arrowLeftRight;
+      case ActivityType.refund:
+        return LucideIcons.cornerUpLeft;
+      case ActivityType.cashMovement:
+        return LucideIcons.wallet;
+      case ActivityType.productAdd:
+        return LucideIcons.packagePlus;
+      case ActivityType.productUpdate:
+        return LucideIcons.pencil;
+      case ActivityType.productDelete:
+        return LucideIcons.trash2;
+      case ActivityType.productQuantityUpdate:
+        return LucideIcons.package;
+      case ActivityType.userAdd:
+        return LucideIcons.userPlus;
+      case ActivityType.userUpdate:
+        return LucideIcons.userCheck;
+      case ActivityType.userDelete:
+        return LucideIcons.userMinus;
+      case ActivityType.sessionOpen:
+        return LucideIcons.logIn;
+      case ActivityType.sessionClose:
+        return LucideIcons.logOut;
+      case ActivityType.restock:
+        return LucideIcons.packagePlus;
+      case ActivityType.expense:
+        return LucideIcons.dollarSign;
+      case ActivityType.invoiceDelete:
+        return LucideIcons.fileMinus;
+      case ActivityType.printReport:
+        return LucideIcons.printer;
+      case ActivityType.login:
+        return LucideIcons.key;
+      case ActivityType.customerCreated:
+      case ActivityType.customerUpdated:
+      case ActivityType.customerDeleted:
+      case ActivityType.customerPayment:
+        return LucideIcons.userRound;
+      case ActivityType.supplierCreated:
+      case ActivityType.supplierUpdated:
+      case ActivityType.supplierDeleted:
+      case ActivityType.supplierPayment:
+        return LucideIcons.truck;
+      case ActivityType.stockMovement:
+      case ActivityType.stockAdjustment:
+        return LucideIcons.arrowLeftRight;
+      case ActivityType.purchaseCreated:
+        return LucideIcons.shoppingBag;
+      case ActivityType.supplierReturn:
+        return LucideIcons.undo2;
+      case ActivityType.orderCreated:
+      case ActivityType.orderConfirmed:
+      case ActivityType.orderCancelled:
+      case ActivityType.orderConverted:
+      case ActivityType.proformaCreated:
+      case ActivityType.proformaConfirmed:
+      case ActivityType.proformaCancelled:
+      case ActivityType.proformaConverted:
+        return LucideIcons.fileText;
+      case ActivityType.openingStockPosted:
+        return LucideIcons.box;
+      case ActivityType.backupCreated:
+      case ActivityType.backupRestored:
+      case ActivityType.backupDeleted:
+      case ActivityType.backupCreateDenied:
+      case ActivityType.backupRestoreDenied:
+      case ActivityType.backupDeleteDenied:
+      case ActivityType.backupCreateFailed:
+      case ActivityType.backupRestoreFailed:
+      case ActivityType.backupDeleteFailed:
+        return LucideIcons.database;
+      case ActivityType.appModeChanged:
+      case ActivityType.appModeChangeDenied:
+      case ActivityType.appModeChangeFailed:
+        return LucideIcons.settings;
+      case ActivityType.demoResetCompleted:
+      case ActivityType.demoResetDenied:
+      case ActivityType.demoResetFailed:
+        return LucideIcons.rotateCcw;
+    }
+  }
+
+  Color _getColorForType(ActivityType type) {
+    switch (type) {
+      case ActivityType.sale:
+        return AppColors.successColor;
+      case ActivityType.exchange:
+        return Colors.deepPurple;
+      case ActivityType.refund:
+        return AppColors.warningColor;
+      case ActivityType.cashMovement:
+        return AppColors.successColor;
+      case ActivityType.productAdd:
+        return AppColors.primaryColor;
+      case ActivityType.productUpdate:
+        return AppColors.accentGold;
+      case ActivityType.productDelete:
+        return AppColors.errorColor;
+      case ActivityType.productQuantityUpdate:
+        return Colors.purple;
+      case ActivityType.userAdd:
+        return Colors.blue;
+      case ActivityType.userUpdate:
+        return Colors.teal;
+      case ActivityType.userDelete:
+        return Colors.red;
+      case ActivityType.sessionOpen:
+        return Colors.green;
+      case ActivityType.sessionClose:
+        return Colors.orange;
+      case ActivityType.restock:
+        return Colors.indigo;
+      case ActivityType.expense:
+        return Colors.brown;
+      case ActivityType.invoiceDelete:
+        return Colors.redAccent;
+      case ActivityType.printReport:
+        return Colors.blueGrey;
+      case ActivityType.login:
+        return Colors.cyan;
+      case ActivityType.customerCreated:
+      case ActivityType.customerUpdated:
+      case ActivityType.customerDeleted:
+      case ActivityType.customerPayment:
+        return Colors.blue.shade700;
+      case ActivityType.supplierCreated:
+      case ActivityType.supplierUpdated:
+      case ActivityType.supplierDeleted:
+      case ActivityType.supplierPayment:
+        return Colors.orange.shade700;
+      case ActivityType.stockMovement:
+      case ActivityType.stockAdjustment:
+        return Colors.deepPurple;
+      case ActivityType.purchaseCreated:
+        return Colors.orange;
+      case ActivityType.supplierReturn:
+        return Colors.redAccent;
+      case ActivityType.orderCreated:
+      case ActivityType.orderConfirmed:
+      case ActivityType.orderCancelled:
+      case ActivityType.orderConverted:
+      case ActivityType.proformaCreated:
+      case ActivityType.proformaConfirmed:
+      case ActivityType.proformaCancelled:
+      case ActivityType.proformaConverted:
+        return Colors.indigo;
+      case ActivityType.openingStockPosted:
+        return Colors.teal;
+      case ActivityType.backupCreated:
+      case ActivityType.backupRestored:
+      case ActivityType.backupDeleted:
+      case ActivityType.backupCreateDenied:
+      case ActivityType.backupRestoreDenied:
+      case ActivityType.backupDeleteDenied:
+      case ActivityType.backupCreateFailed:
+      case ActivityType.backupRestoreFailed:
+      case ActivityType.backupDeleteFailed:
+        return AppColors.primaryColor;
+      case ActivityType.appModeChanged:
+      case ActivityType.appModeChangeDenied:
+      case ActivityType.appModeChangeFailed:
+        return Colors.indigo;
+      case ActivityType.demoResetCompleted:
+      case ActivityType.demoResetDenied:
+      case ActivityType.demoResetFailed:
+        return AppColors.errorColor;
+    }
+  }
+
+  String _getTypeName(ActivityType type) {
+    final l10n = AppLocalizations.of(context);
+    switch (type) {
+      case ActivityType.sale:
+        return l10n.actSale;
+      case ActivityType.exchange:
+        return 'Exchange';
+      case ActivityType.refund:
+        return l10n.actRefund;
+      case ActivityType.cashMovement:
+        return 'Cash movement';
+      case ActivityType.productAdd:
+        return l10n.actProductAdd;
+      case ActivityType.productUpdate:
+        return l10n.actProductUpdate;
+      case ActivityType.productDelete:
+        return l10n.actProductDelete;
+      case ActivityType.productQuantityUpdate:
+        return l10n.actProductQtyUpdate;
+      case ActivityType.userAdd:
+        return l10n.actUserAdd;
+      case ActivityType.userUpdate:
+        return l10n.actUserUpdate;
+      case ActivityType.userDelete:
+        return l10n.actUserDelete;
+      case ActivityType.sessionOpen:
+        return l10n.actSessionOpen;
+      case ActivityType.sessionClose:
+        return l10n.actSessionClose;
+      case ActivityType.restock:
+        return l10n.actRestock;
+      case ActivityType.expense:
+        return l10n.actExpense;
+      case ActivityType.invoiceDelete:
+        return l10n.actInvoiceDelete;
+      case ActivityType.printReport:
+        return l10n.actPrintReport;
+      case ActivityType.login:
+        return l10n.actLogin;
+      case ActivityType.customerCreated:
+        return 'Customer created';
+      case ActivityType.customerUpdated:
+        return 'Customer updated';
+      case ActivityType.customerDeleted:
+        return 'Customer deleted';
+      case ActivityType.customerPayment:
+        return 'Customer payment';
+      case ActivityType.supplierCreated:
+        return 'Supplier created';
+      case ActivityType.supplierUpdated:
+        return 'Supplier updated';
+      case ActivityType.supplierDeleted:
+        return 'Supplier deleted';
+      case ActivityType.supplierPayment:
+        return 'Supplier payment';
+      case ActivityType.stockMovement:
+        return 'Stock movement';
+      case ActivityType.stockAdjustment:
+        return 'Stock adjustment';
+      case ActivityType.purchaseCreated:
+        return l10n.purchases;
+      case ActivityType.supplierReturn:
+        return l10n.supplierReturns;
+      case ActivityType.orderCreated:
+        return l10n.orders;
+      case ActivityType.orderConfirmed:
+        return l10n.orderConfirmed;
+      case ActivityType.orderCancelled:
+        return l10n.orderCancelled;
+      case ActivityType.orderConverted:
+        return l10n.orderConverted;
+      case ActivityType.proformaCreated:
+        return l10n.proformas;
+      case ActivityType.proformaConfirmed:
+        return l10n.proformaConfirmed;
+      case ActivityType.proformaCancelled:
+        return l10n.proformaCancelled;
+      case ActivityType.proformaConverted:
+        return l10n.proformaConverted;
+      case ActivityType.openingStockPosted:
+        return l10n.openingStock;
+      case ActivityType.backupCreated:
+        return 'Backup created';
+      case ActivityType.backupRestored:
+        return 'Backup restored';
+      case ActivityType.backupDeleted:
+        return 'Backup deleted';
+      case ActivityType.appModeChanged:
+        return 'Mode changed';
+      case ActivityType.demoResetCompleted:
+        return 'Demo reset';
+      case ActivityType.backupCreateDenied:
+        return 'Backup denied';
+      case ActivityType.backupRestoreDenied:
+        return 'Restore denied';
+      case ActivityType.backupDeleteDenied:
+        return 'Delete denied';
+      case ActivityType.appModeChangeDenied:
+        return 'Mode change denied';
+      case ActivityType.demoResetDenied:
+        return 'Demo reset denied';
+      case ActivityType.backupCreateFailed:
+        return 'Backup failed';
+      case ActivityType.backupRestoreFailed:
+        return 'Restore failed';
+      case ActivityType.backupDeleteFailed:
+        return 'Delete failed';
+      case ActivityType.appModeChangeFailed:
+        return 'Mode change failed';
+      case ActivityType.demoResetFailed:
+        return 'Demo reset failed';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 8),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceColor,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.borderColor, width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 8,
+            spreadRadius: 0,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      AppColors.primaryColor.withOpacity(0.1),
+                      AppColors.primaryColor.withOpacity(0.05),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  LucideIcons.activity,
+                  color: AppColors.primaryColor,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                l10n.recentOperationsTitle,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _groups.isEmpty
+                    ? _buildEmptyState()
+                    : _buildGroupedList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    final l10n = AppLocalizations.of(context);
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            LucideIcons.inbox,
+            size: 48,
+            color: AppColors.mutedColor.withOpacity(0.5),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            l10n.noRecentOperations,
+            style: const TextStyle(
+              color: AppColors.mutedColor,
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGroupedList() {
+    final l10n = AppLocalizations.of(context);
+    final userCubit = getIt<UserCubit>();
+    final isCashier = userCubit.currentUser.userType == UserType.cashier;
+
+    return ListView.builder(
+      padding: EdgeInsets.zero,
+      itemCount: _groups.length + 1,
+      itemBuilder: (context, groupIndex) {
+        if (groupIndex == _groups.length) {
+          return _buildLoadMoreButton();
+        }
+        final group = _groups[groupIndex];
+
+        // Filter activities for cashier
+        var activities = group.activities;
+        if (isCashier) {
+          activities = activities
+              .where((a) =>
+                  a.userName == userCubit.currentUser.name &&
+                  (a.type == ActivityType.sale ||
+                      a.type == ActivityType.refund ||
+                      a.type == ActivityType.sessionOpen ||
+                      a.type == ActivityType.sessionClose ||
+                      a.type == ActivityType.login))
+              .toList();
+        }
+
+        if (activities.isEmpty) return const SizedBox.shrink();
+
+        // Separate session events from operational activities
+        final operationalActivities = activities
+            .where((a) =>
+                a.type != ActivityType.sessionOpen &&
+                a.type != ActivityType.sessionClose)
+            .toList();
+
+        // Count logins for summary
+        final loginCount =
+            activities.where((a) => a.type == ActivityType.login).length;
+
+        // Sort operational activities: newest first
+        operationalActivities
+            .sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Session header with operation count
+            _buildSessionHeader(group,
+                operationCount: operationalActivities.length),
+            // Login summary if any
+            if (loginCount > 0) _buildLoginSummary(loginCount),
+            // Operational activities (no session open/close/login clutter)
+            ...operationalActivities
+                .map((activity) => _buildActivityTile(activity)),
+            // Empty state for session with no real operations
+            if (operationalActivities.isEmpty && loginCount == 0)
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                child: Text(
+                  l10n.noOperationsToday,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.mutedColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            // Separator between session groups
+            if (groupIndex < _groups.length - 1)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Divider(
+                  thickness: 2,
+                  color: AppColors.borderColor.withOpacity(0.3),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildLoginSummary(int count) {
+    final l10n = AppLocalizations.of(context);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.cyan.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(LucideIcons.key, size: 13, color: Colors.cyan.shade600),
+          const SizedBox(width: 8),
+          Text(
+            l10n.loginsCount(count),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: Colors.cyan.shade700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSessionHeader(SessionActivityGroup group,
+      {int operationCount = 0}) {
+    final l10n = AppLocalizations.of(context);
+    final timeFormat = DateFormat('hh:mm a');
+    final dateFormat = DateFormat('dd/MM/yyyy');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: group.isOpen
+              ? [Colors.green.withOpacity(0.1), Colors.green.withOpacity(0.03)]
+              : [Colors.grey.withOpacity(0.08), Colors.grey.withOpacity(0.02)],
+        ),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: group.isOpen
+              ? Colors.green.withOpacity(0.3)
+              : Colors.grey.withOpacity(0.2),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            group.isOpen ? LucideIcons.circlePlay : LucideIcons.circleCheck,
+            size: 16,
+            color: group.isOpen ? Colors.green : Colors.grey,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  group.isOpen
+                      ? l10n.activeDayUser(TranslationHelper.translateUserName(
+                          context, group.openedBy))
+                      : l10n.closedDayUser(TranslationHelper.translateUserName(
+                          context, group.openedBy)),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: group.isOpen
+                        ? Colors.green.shade700
+                        : AppColors.textSecondary,
+                  ),
+                ),
+                if (operationCount > 0)
+                  Text(
+                    l10n.operationsCount(operationCount),
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: AppColors.mutedColor,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                dateFormat.format(group.openTime),
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              Text(
+                timeFormat.format(group.openTime),
+                style: TextStyle(
+                  fontSize: 10,
+                  color: AppColors.mutedColor,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActivityTile(ActivityLog activity) {
+    final timeFormat = DateFormat('hh:mm a');
+    final activityColor = _getColorForType(activity.type);
+
+    // Special styling for session open/close
+    final isSessionEvent = activity.type == ActivityType.sessionOpen ||
+        activity.type == ActivityType.sessionClose;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+      decoration: isSessionEvent
+          ? BoxDecoration(
+              color: activityColor.withOpacity(0.04),
+              borderRadius: BorderRadius.circular(8),
+            )
+          : null,
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  activityColor.withOpacity(0.15),
+                  activityColor.withOpacity(0.08),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              _getIconForType(activity.type),
+              color: activityColor,
+              size: 16,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: activityColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        _getTypeName(activity.type),
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: activityColor,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        ActivityLogger.formatActivity(context, activity),
+                        style: TextStyle(
+                          fontWeight: isSessionEvent
+                              ? FontWeight.w700
+                              : FontWeight.w600,
+                          fontSize: 13,
+                          color: isSessionEvent
+                              ? activityColor
+                              : AppColors.textPrimary,
+                          height: 1.3,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  TranslationHelper.translateUserName(
+                      context, activity.userName),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.primaryColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (activity.details != null &&
+                    activity.details!.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    ActivityLogger.formatDetails(
+                        context, activity.type, activity.details),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                      height: 1.3,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            timeFormat.format(activity.timestamp),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLoadMoreButton() {
+    final l10n = AppLocalizations.of(context);
+    if (_groups.isEmpty) return const SizedBox.shrink();
+
+    if (_loadingMore) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Center(
+        child: TextButton.icon(
+          onPressed: _loadMore,
+          icon: const Icon(LucideIcons.plus, size: 14),
+          label: Text(l10n.showMore),
+          style: TextButton.styleFrom(
+            foregroundColor: AppColors.primaryColor,
+            visualDensity: VisualDensity.compact,
+            textStyle:
+                const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+          ),
+        ),
+      ),
+    );
+  }
+}

@@ -1,0 +1,342 @@
+import 'package:bayaa_pos/features/auth/presentation/login_screen.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:bayaa_pos/core/constants/app_brand.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:bayaa_pos/l10n/app_localizations.dart';
+import 'package:bayaa_pos/core/localization/locale_provider.dart';
+import 'package:window_manager/window_manager.dart';
+import 'package:screen_retriever/screen_retriever.dart';
+import 'dart:io';
+import 'dart:async';
+
+import 'core/constants/bloc_observer.dart';
+import 'core/di/dependency_injection.dart';
+import 'core/theme/app_theme.dart';
+import 'core/components/message_overlay.dart';
+import 'core/logging/file_logger.dart';
+import 'core/logging/crash_logger.dart';
+import 'features/auth/presentation/cubit/user_cubit.dart';
+import 'features/auth/presentation/cubit/user_states.dart';
+import 'core/data/services/persistence_initializer.dart';
+import 'features/sessions/data/repositories/session_repository_impl.dart';
+import 'core/services/activity_logger.dart';
+import 'core/data/services/recovery_service.dart';
+import 'core/data/services/checkpoint_service.dart';
+import 'core/data/services/backup_manager.dart';
+import 'core/data/services/debug_seeder.dart';
+import 'core/network/backend_api_config.dart';
+import 'core/network/backend_auth_bootstrap.dart';
+import 'core/network/backend_api_error.dart';
+
+void _logYezinConfig() {
+  if (!kDebugMode) return;
+  debugPrint('[YezinConfig]');
+  debugPrint(
+    'rawProductReadMode=${BackendApiConfig.rawProductReadMode}',
+  );
+  debugPrint('apiBaseUrl=${BackendApiConfig.rawApiBaseUrl}');
+  debugPrint('hasUsername=${BackendApiConfig.rawUsername.isNotEmpty}');
+  debugPrint('hasPassword=${BackendApiConfig.rawPassword.isNotEmpty}');
+  debugPrint(
+    'resolvedProductReadMode=${BackendApiConfig.productReadMode}',
+  );
+}
+
+Future<void> _initializePersistenceSystem() async {
+  print('[PERSISTENCE] begin');
+  try {
+    final initialized = await PersistenceInitializer.initialize();
+    if (initialized) {
+      print('[PERSISTENCE] completed');
+      print(
+        '📁 Data root: '
+        '${PersistenceInitializer.persistenceManager!.pathResolver.dataRootPath}',
+      );
+
+      FileLogger.info(
+        'Persistence system initialized successfully',
+        source: 'Init',
+      );
+
+      try {
+        final settings =
+            await PersistenceInitializer.settingsRepository!.getStoreSettings();
+
+        FileLogger.info(
+          'Store settings loaded: ${settings.storeName}',
+          source: 'Init',
+        );
+      } catch (e) {
+        FileLogger.warning(
+          'Store settings error',
+          error: e,
+          source: 'Init',
+        );
+      }
+
+      // Seed mock data only in explicit Development Mode and only on a separate dev data root.
+      final appMode = PersistenceInitializer.persistenceManager?.config.appMode;
+
+      if (appMode == 'development') {
+        try {
+          await DebugSeeder.seedIfNeeded();
+        } catch (e, stack) {
+          FileLogger.error(
+            'Failed to seed development data',
+            error: e,
+            stackTrace: stack,
+            source: 'Init',
+          );
+        }
+      }
+
+      // Load current session
+      await getIt<SessionRepositoryImpl>().loadCurrentSession();
+
+      final session = getIt<SessionRepositoryImpl>().getCurrentSession();
+
+      if (session != null) {
+        FileLogger.info(
+          'Resumed open session: ${session.id}',
+          source: 'Init',
+        );
+      } else {
+        print('[PERSISTENCE] awaiting data path configuration');
+        FileLogger.info(
+          'No open session to resume',
+          source: 'Init',
+        );
+      }
+
+      await RecoveryService().check();
+
+      await getIt<ActivityLogger>().loadRecentActivities();
+
+      // Create startup checkpoint
+      await CheckpointService().createCheckpoint(
+        reason: 'startup',
+        userName: 'system',
+      );
+
+      // Register BackupManager in GetIt for data_management_screen access
+      if (!getIt.isRegistered<BackupManager>()) {
+        getIt.registerSingleton<BackupManager>(
+          PersistenceInitializer.persistenceManager!.backupManager,
+        );
+      }
+
+      // Start periodic auto-backup every 30 minutes
+      PersistenceInitializer.persistenceManager!.backupManager
+          .startPeriodicBackup();
+    } else {
+      FileLogger.info(
+        'First launch detected, awaiting data path configuration',
+        source: 'Init',
+      );
+    }
+  } catch (e, stackTrace) {
+    print('[PERSISTENCE] failed: $e');
+    FileLogger.critical(
+      'Persistence system initialization failed',
+      error: e,
+      stackTrace: stackTrace,
+      source: 'Init',
+    );
+
+    CrashLogger.logException(
+      e,
+      stackTrace: stackTrace,
+      context: 'Persistence initialization',
+      isFatal: false,
+    );
+  }
+}
+
+void main() async {
+  // Wrap entire app in error zone to catch all async errors
+  runZonedGuarded(
+    () async {
+      try {
+        WidgetsFlutterBinding.ensureInitialized();
+        _logYezinConfig();
+
+        // 1. Initialize Window Manager for Desktop
+        if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+          await windowManager.ensureInitialized();
+          await _setupWindow();
+        }
+
+        Bloc.observer = MyBlocObserver();
+
+        // 2. Setup Dependency Injection
+        setup();
+
+        // 3. Initialize Persistence System (includes logging)
+        print('[STARTUP] begin');
+        await _initializePersistenceSystem();
+        if (BackendApiConfig.serverAuthEnabled) {
+          debugPrint('[AUTH] backend authentication bootstrap started');
+          try {
+            final ready = await getIt<BackendAuthBootstrap>().initialize();
+            debugPrint('[AUTH] backend authentication bootstrap '
+                '${ready ? 'succeeded' : 'not ready'}');
+          } on BackendApiException catch (error) {
+            debugPrint('[AUTH] backend authentication failed '
+                '(status=${error.statusCode})');
+          } catch (_) {
+            debugPrint('[AUTH] backend authentication failed');
+          }
+        }
+        print('[STARTUP] completed');
+
+        // 4. Start application
+        FileLogger.info(
+          'App starting normally',
+          source: 'Main',
+        );
+
+        runApp(const MyApp());
+      } catch (e, stack) {
+        FileLogger.critical(
+          'Critical startup error',
+          error: e,
+          stackTrace: stack,
+          source: 'Main',
+        );
+
+        CrashLogger.logException(
+          e,
+          stackTrace: stack,
+          context: 'App startup',
+          isFatal: true,
+        );
+
+        runApp(
+          MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SelectableText(
+                  'Failed to start application: $e',
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+    },
+    (error, stack) {
+      // Catch all unhandled async errors
+      FileLogger.critical(
+        'Unhandled async error',
+        error: error,
+        stackTrace: stack,
+        source: 'ErrorZone',
+      );
+
+      CrashLogger.logException(
+        error,
+        stackTrace: stack,
+        context: 'Unhandled async error',
+        isFatal: true,
+      );
+    },
+  );
+}
+
+Future<void> _setupWindow() async {
+  final primaryDisplay = await screenRetriever.getPrimaryDisplay();
+
+  final screenWidth = primaryDisplay.size.width;
+  final screenHeight = primaryDisplay.size.height;
+
+  final WindowOptions windowOptions = WindowOptions(
+    size: Size(
+      screenWidth,
+      screenHeight - 60,
+    ),
+    minimumSize: Size(
+      screenWidth,
+      screenHeight - 60,
+    ),
+    center: true,
+    backgroundColor: Colors.transparent,
+    skipTaskbar: false,
+    titleBarStyle: TitleBarStyle.normal,
+    title: AppBrand.name,
+  );
+
+  await windowManager.waitUntilReadyToShow(
+    windowOptions,
+    () async {
+      await windowManager.show();
+      await windowManager.focus();
+      await windowManager.maximize();
+    },
+  );
+}
+
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final localeProvider = getIt<LocaleProvider>();
+
+    return ListenableBuilder(
+      listenable: localeProvider,
+      builder: (context, _) {
+        return BlocProvider<UserCubit>.value(
+          value: getIt<UserCubit>(),
+          child: MessageOverlay(
+            child: MaterialApp(
+              navigatorKey: navigatorKey,
+              title: AppBrand.name,
+              debugShowCheckedModeBanner: false,
+              theme: AppTheme.lightTheme,
+              home: const LoginScreen(),
+              locale: localeProvider.locale,
+              supportedLocales: const [
+                Locale('ar'),
+                Locale('en'),
+              ],
+              localizationsDelegates: [
+                AppLocalizations.delegate,
+                GlobalMaterialLocalizations.delegate,
+                GlobalWidgetsLocalizations.delegate,
+                GlobalCupertinoLocalizations.delegate,
+              ],
+              builder: (context, child) {
+                // Initialize global message context
+                GlobalMessage.initialize(context);
+
+                return BlocListener<UserCubit, UserStates>(
+                  listener: (context, state) {
+                    if (state is UserInitial) {
+                      // Global logout handler
+                      navigatorKey.currentState?.pushAndRemoveUntil(
+                        MaterialPageRoute(
+                          builder: (_) => const LoginScreen(),
+                        ),
+                        (route) => false,
+                      );
+                    }
+                  },
+                  child: Directionality(
+                    textDirection: localeProvider.isArabic
+                        ? TextDirection.rtl
+                        : TextDirection.ltr,
+                    child: child!,
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
